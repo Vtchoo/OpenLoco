@@ -58,6 +58,9 @@
 #include <cassert>
 #include <numeric>
 #include <optional>
+#include <queue>
+#include <unordered_map>
+#include <vector>
 
 using namespace OpenLoco::Literals;
 using namespace OpenLoco::World;
@@ -5953,6 +5956,136 @@ namespace OpenLoco::Vehicles
         return false;
     }
 
+    // Extra cost (in track weighting units, a straight piece is 32) for passing a signal that is occupied
+    static constexpr uint32_t kOccupiedSignalPenalty = 320;
+    // Extra cost for routing through a station tile that isn't the target (about 60 straight pieces)
+    static constexpr uint32_t kNonTargetStationPenalty = 2000;
+    // Safety cap so a huge network with an unreachable target can't stall a tick
+    static constexpr size_t kMaxTrackSearchExpansions = 50000;
+
+    struct TrackSearchNode
+    {
+        World::Pos3 pos;
+        uint16_t tad; // basicTaDWithSignalMask
+        StationId stationId;
+        uint8_t firstConnection; // Index into the junction's connections this path started with
+    };
+
+    struct TrackSearchResult
+    {
+        uint8_t connectionIndex;
+        uint32_t cost;
+    };
+
+    static uint64_t getTrackSearchKey(const World::Pos3 pos, const uint16_t tad)
+    {
+        return (static_cast<uint64_t>(static_cast<uint16_t>(pos.x)) << 48)
+            | (static_cast<uint64_t>(static_cast<uint16_t>(pos.y)) << 32)
+            | (static_cast<uint64_t>(static_cast<uint16_t>(pos.z)) << 16)
+            | tad;
+    }
+
+    // Dijkstra over every (position, track and direction) reachable from the junction.
+    // Edge cost is the weighting of the piece being traversed (plus a penalty for occupied signals).
+    // Pieces behind a signal that forbids our direction are not traversable.
+    // Returns the junction connection that starts the cheapest route to the target or nullopt
+    // if the target can't be reached (or the search cap was hit).
+    static std::optional<TrackSearchResult> trackTargetedGraphSearch(const World::Pos3 pos, const Track::TrackConnections& tc, const CompanyId companyId, const uint8_t trackType, const uint8_t requiredMods, const uint8_t queryMods, const Sub4AC94FTarget& target)
+    {
+        using QueueEntry = std::pair<uint32_t, size_t>; // cost, index into nodes
+
+        std::vector<TrackSearchNode> nodes;
+        std::unordered_map<uint64_t, uint32_t> bestCosts;
+        std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<>> open;
+
+        const auto tryPush = [&](const World::Pos3 nodePos, const uint16_t tad, const StationId stationId, const uint32_t cost, const uint8_t firstConnection) {
+            const auto [it, inserted] = bestCosts.try_emplace(getTrackSearchKey(nodePos, tad), cost);
+            if (!inserted)
+            {
+                if (it->second <= cost)
+                {
+                    return;
+                }
+                it->second = cost;
+            }
+            nodes.push_back(TrackSearchNode{ nodePos, tad, stationId, firstConnection });
+            open.emplace(cost, nodes.size() - 1);
+        };
+
+        for (auto i = 0U; i < tc.connections.size(); ++i)
+        {
+            tryPush(pos, tc.connections[i] & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, StationId::null, 0, static_cast<uint8_t>(i));
+        }
+
+        size_t expansions = 0;
+        while (!open.empty())
+        {
+            const auto [cost, index] = open.top();
+            open.pop();
+            // Copy as tryPush below can reallocate nodes
+            const auto node = nodes[index];
+
+            if (bestCosts[getTrackSearchKey(node.pos, node.tad)] < cost)
+            {
+                continue; // Stale queue entry
+            }
+
+            const auto basicTad = static_cast<uint16_t>(node.tad & World::Track::AdditionalTaDFlags::basicTaDMask);
+            bool hasReachedTarget = false;
+            if (target.stationId != StationId::null)
+            {
+                hasReachedTarget = node.stationId == target.stationId;
+            }
+            else
+            {
+                hasReachedTarget = (node.pos == target.pos && basicTad == target.tad)
+                    || (node.pos == target.reversePos && basicTad == target.reverseTad);
+            }
+            if (hasReachedTarget)
+            {
+                return TrackSearchResult{ node.firstConnection, cost };
+            }
+
+            if (++expansions > kMaxTrackSearchExpansions)
+            {
+                break;
+            }
+
+            uint32_t penalty = 0;
+            if (node.tad & World::Track::AdditionalTaDFlags::hasSignal)
+            {
+                TrackAndDirection::_TrackAndDirection signalTad{ 0, 0 };
+                signalTad._data = basicTad;
+                const auto sigState = getSignalState(node.pos, signalTad, trackType, 0);
+                if ((sigState & SignalStateFlags::blockedNoRoute) != SignalStateFlags::none)
+                {
+                    continue;
+                }
+                if ((sigState & SignalStateFlags::occupied) != SignalStateFlags::none)
+                {
+                    penalty = kOccupiedSignalPenalty;
+                }
+            }
+
+            if (node.stationId != StationId::null && node.stationId != target.stationId)
+            {
+                penalty += kNonTargetStationPenalty;
+            }
+
+            TrackAndDirection::_TrackAndDirection curTad{ 0, 0 };
+            curTad._data = basicTad;
+            const auto newCost = cost + penalty + World::TrackData::getTrackMiscData(curTad.id()).unkWeighting;
+
+            const auto [nextPos, nextRotation] = Track::getTrackConnectionEnd(node.pos, basicTad);
+            const auto nextTc = World::Track::getTrackConnections(nextPos, nextRotation, companyId, trackType, requiredMods, queryMods);
+            for (const auto connection : nextTc.connections)
+            {
+                tryPush(nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, nextTc.stationId, newCost, node.firstConnection);
+            }
+        }
+        return std::nullopt;
+    }
+
     // 0x004AC3D3
     // pos.x : ax
     // pos.y : cx
@@ -6011,7 +6144,31 @@ namespace OpenLoco::Vehicles
                     target.reversePos -= World::Pos3{ World::kRotationOffset[trackSize.rotationEnd], 0 };
                 }
                 target.reverseTad = target.tad ^ (1U << 2); // Reverse
+                if (trackSize.rotationEnd < 12)
+                {
+                    // Same reversed form used when the head consumes the waypoint order
+                    target.reverseTad = (target.reverseTad & ~0x3) | (World::kReverseRotation[trackSize.rotationEnd] & 0x3);
+                }
             }
+            // Full search to the target, no waypoints needed
+            if (const auto best = trackTargetedGraphSearch(pos, tc, companyId, trackType, requiredMods, queryMods, target))
+            {
+                const RoutingResult newResult{ 0, best->cost, RouteSignalState::signalClear };
+                bool isBetter = isTrackRoutingResultBetter(state.result, newResult);
+                // When comparing the tail direction a tie must not cause a reversal
+                if (isSecondRun && state.result.bestDistToTarget == 0 && state.result.bestTrackWeighting == newResult.bestTrackWeighting)
+                {
+                    isBetter = false;
+                }
+                if (isBetter)
+                {
+                    state.result = newResult;
+                    state.hadNewResult = 1;
+                }
+                return tc.connections[best->connectionIndex];
+            }
+
+            // Target unreachable (or search cap hit), fall back to the legacy closest approach heuristic
             // 0x004AC5F5
 
             uint32_t bestConnection = 0;
