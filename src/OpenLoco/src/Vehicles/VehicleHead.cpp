@@ -4636,11 +4636,18 @@ namespace OpenLoco::Vehicles
                 {
                     // 0x004AD3F8
                     const auto reverseSignalState = getSignalState(nextPos, tad, head.trackType, 1U << 31);
-                    _vehicleMangled_113623B = enumValue(reverseSignalState);
+                    uint8_t waitFlags = enumValue(reverseSignalState);
+                    if (isChainBlocked)
+                    {
+                        // The block right after a chain signal is usually empty so the train must not be allowed to
+                        // run the signal on that basis, bit 7 makes it reverse out after the timeout instead
+                        waitFlags |= (1U << 7);
+                    }
+                    _vehicleMangled_113623B = waitFlags;
                     if (head.var_5C == 0)
                     {
                         train.veh1->var_48 &= ~Flags48::passSignal;
-                        return Sub4ACEE7Result{ 3, enumValue(reverseSignalState), StationId::null };
+                        return Sub4ACEE7Result{ 3, waitFlags, StationId::null };
                     }
                 }
                 else

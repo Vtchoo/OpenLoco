@@ -172,6 +172,11 @@ namespace OpenLoco::S5
         void setHasLevelCrossing(bool v) { _6 = (_6 & ~0x10) | (v ? 0x10 : 0); }
         uint8_t bridge() const { return _6 >> 5; }
         void setBridge(uint8_t v) { _6 = (_6 & ~0xE0) | ((v & 0x7) << 5); }
+        // Not part of the original format, these use bits that the original game leaves unused
+        uint8_t leftSignalKind() const { return _6 & 0x3; }
+        void setLeftSignalKind(uint8_t v) { _6 = (_6 & ~0x3) | (v & 0x3); }
+        uint8_t rightSignalKind() const { return (_6 >> 2) & 0x3; }
+        void setRightSignalKind(uint8_t v) { _6 = (_6 & ~0xC) | ((v & 0x3) << 2); }
         uint8_t owner() const { return _7 & 0xF; }
         void setOwner(uint8_t v) { _7 = (_7 & 0xF0) | (v & 0xF); }
         uint8_t mods() const { return _7 >> 4; }

@@ -15,6 +15,7 @@
 #include "Paint/PaintTileDecorations.h"
 #include "Ui.h"
 #include "Ui/ViewportInteraction.h"
+#include "Ui/WindowManager.h"
 #include "Viewport.hpp"
 #include "World/CompanyManager.h"
 #include <OpenLoco/Engine/World.hpp>
@@ -213,10 +214,10 @@ namespace OpenLoco::Paint
                 }
             }
 
-            // The direction arrows view is what's shown while placing signals
+            // Only while the signal tab is open, i.e. when signals are being edited
             if (kind == World::SignalKind::chain
-                && (session.getViewFlags() & Ui::ViewportFlags::one_way_direction_arrows) != Ui::ViewportFlags::none
-                && session.getZoom() <= ZoomLevel::full)
+                && session.getZoom() <= ZoomLevel::full
+                && Ui::Windows::Construction::isSignalTabOpen())
             {
                 paintChainSignalMarker(session, offset);
             }

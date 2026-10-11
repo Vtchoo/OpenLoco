@@ -76,6 +76,8 @@ namespace OpenLoco::S5
                 dstElem.setTrackObjectId(srcElem.trackObjectId());
                 dstElem.setHasLevelCrossing(srcElem.hasLevelCrossing());
                 dstElem.setBridge(srcElem.bridge());
+                dstElem.setLeftSignalKind(static_cast<uint8_t>(srcElem.leftSignalKind()));
+                dstElem.setRightSignalKind(static_cast<uint8_t>(srcElem.rightSignalKind()));
                 dstElem.setOwner(enumValue(srcElem.owner()));
                 dstElem.setMods(srcElem.mods());
                 break;

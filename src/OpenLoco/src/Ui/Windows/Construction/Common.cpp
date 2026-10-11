@@ -904,6 +904,12 @@ namespace OpenLoco::Ui::Windows::Construction
             self.frameNo = 0;
             self.flags &= ~(WindowFlags::maximised);
 
+            // Chain signal markers are only drawn on the signal tab so the map needs repainting
+            if (auto* mainWindow = WindowManager::getMainWindow(); mainWindow != nullptr)
+            {
+                mainWindow->invalidate();
+            }
+
             auto tabInfo = tabInformationByTabOffset[widgetIndex - widx::tab_construction];
 
             self.eventHandlers = &tabInfo.events;

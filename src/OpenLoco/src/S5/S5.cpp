@@ -201,6 +201,8 @@ namespace OpenLoco::S5
                     dstElem.setTrackObjectId(d.trackObjectId());
                     dstElem.setHasLevelCrossing(d.hasLevelCrossing());
                     dstElem.setBridgeObjectId(d.bridge());
+                    dstElem.setLeftSignalKind(static_cast<World::SignalKind>(d.leftSignalKind()));
+                    dstElem.setRightSignalKind(static_cast<World::SignalKind>(d.rightSignalKind()));
                     dstElem.setOwner(static_cast<CompanyId>(d.owner()));
                     for (uint8_t m = 0; m < 4; ++m)
                     {
