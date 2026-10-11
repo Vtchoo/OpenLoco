@@ -41,9 +41,10 @@ namespace OpenLoco::Ui::Windows::Construction::Signal
         World::SignalKind kind;
         StringId name;
     };
-    static constexpr std::array<SignalKindEntry, 2> kSignalKinds = { {
+    static constexpr std::array<SignalKindEntry, 3> kSignalKinds = { {
         { World::SignalKind::block, StringIds::signal_kind_block },
         { World::SignalKind::chain, StringIds::signal_kind_chain },
+        { World::SignalKind::path, StringIds::signal_kind_path },
     } };
 
     static constexpr auto widgets = makeWidgets(

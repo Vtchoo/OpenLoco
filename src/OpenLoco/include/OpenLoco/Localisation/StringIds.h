@@ -2185,6 +2185,8 @@ namespace OpenLoco::StringIds
     constexpr StringId signal_kind_chain = 2473;
     constexpr StringId tooltip_select_signal_kind = 2474;
     constexpr StringId chain_signal_marker = 2475;
+    constexpr StringId signal_kind_path = 2476;
+    constexpr StringId path_signal_marker = 2477;
 
     constexpr StringId temporary_object_load_str_0 = 8192;
     constexpr StringId temporary_object_load_str_1 = 8193;

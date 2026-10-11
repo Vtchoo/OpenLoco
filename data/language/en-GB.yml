@@ -2526,5 +2526,7 @@ strings:
   2471: "{SMALLFONT}{COLOUR BLACK}Shows the route the pathfinder has calculated for the train of the front most vehicle window as arrows along the track"
   2472: "Block signal"
   2473: "Chain signal"
-  2474: "{SMALLFONT}{COLOUR BLACK}Select the kind of signal to place. Block signals are green when the block ahead is free. Chain signals are also red when the next signal on the train’s route does not allow it to enter, so trains wait before junctions instead of blocking them"
+  2474: "{SMALLFONT}{COLOUR BLACK}Select the kind of signal to place. Block signals are green when the block ahead is free. Chain signals are also red when the next signal on the train’s route does not allow it to enter, so trains wait before junctions instead of blocking them. Path signals reserve a free route to the next signal for the train, so trains can share a junction as long as their routes don’t cross"
   2475: "{COLOUR YELLOW}C"
+  2476: "Path signal"
+  2477: "{COLOUR YELLOW}P"

@@ -1,5 +1,6 @@
 #include "Vehicles/RoutingManager.h"
 #include "GameState.h"
+#include "Vehicles/PathReservation.h"
 #include <algorithm>
 
 namespace OpenLoco::Vehicles::RoutingManager
@@ -67,6 +68,7 @@ namespace OpenLoco::Vehicles::RoutingManager
     void resetRoutingTable()
     {
         std::fill_n(&routings()[0][0], Limits::kMaxVehicles * Limits::kMaxRoutingsPerVehicle, kRoutingNull);
+        PathReservation::reset();
     }
 
     RingView::Iterator::Iterator(const RoutingHandle& begin, bool isEnd, Direction direction)

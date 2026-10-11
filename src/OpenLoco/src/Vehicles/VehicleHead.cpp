@@ -39,6 +39,7 @@
 #include "Ui/WindowManager.h"
 #include "Vehicles/OrderManager.h"
 #include "Vehicles/Orders.h"
+#include "Vehicles/PathReservation.h"
 #include "Vehicles/RoutingManager.h"
 #include "Vehicles/TrainRouteDebug.h"
 #include "Vehicles/Vehicle1.h"
@@ -115,6 +116,7 @@ namespace OpenLoco::Vehicles
     static uint16_t trackLongestPathing(VehicleHead& head, const World::Pos3 pos, const Track::TrackConnections& tc, const uint8_t requiredMods, const uint8_t queryMods);
     static uint16_t trackPathing(VehicleHead& head, const World::Pos3 pos, const Track::TrackConnections& tc, const uint8_t requiredMods, const uint8_t queryMods, bool isSecondRun, Sub4AC3D3State& state);
     static bool isChainRouteBlocked(VehicleHead& head, const World::Pos3 signalPos, const uint16_t signalTad, const uint8_t requiredMods, const uint8_t queryMods);
+    static bool isPathSignalBlocked(VehicleHead& head, const World::Pos3 signalPos, const uint16_t signalTad, const uint8_t requiredMods, const uint8_t queryMods);
 
     struct WaterPathingResult
     {
@@ -4555,7 +4557,13 @@ namespace OpenLoco::Vehicles
         uint16_t connection = tc.connections[0];
         if (tc.connections.size() > 1)
         {
-            if (head.var_52 == 1)
+            // A route reserved at a path signal has to be followed
+            const auto reservedIndex = PathReservation::reservedConnectionIndex(head, nextPos, std::span<const uint16_t>(tc.connections.data(), tc.connections.size()));
+            if (reservedIndex)
+            {
+                connection = tc.connections[*reservedIndex];
+            }
+            else if (head.var_52 == 1)
             {
                 connection = trackLongestPathing(head, nextPos, tc, requiredMods, queryMods);
             }
@@ -4620,7 +4628,10 @@ namespace OpenLoco::Vehicles
                 const auto keySignalStateFlags = isPlaceDown ? (SignalStateFlags::occupied)
                                                              : (SignalStateFlags::occupied | SignalStateFlags::occupiedOneWay | SignalStateFlags::blockedNoRoute);
                 const auto fullSignalState = getSignalState(nextPos, tad, head.trackType, 0U);
-                const auto signalState = fullSignalState & keySignalStateFlags;
+                // Path signals are controlled by reservations so the occupation of the block isn't looked at
+                // (when placing a vehicle they act like block signals)
+                const bool isPathSignal = !isPlaceDown && (fullSignalState & SignalStateFlags::path) != SignalStateFlags::none;
+                const auto signalState = fullSignalState & (isPathSignal ? (SignalStateFlags::occupiedOneWay | SignalStateFlags::blockedNoRoute) : keySignalStateFlags);
 
                 // A chain signal is also red if the route beyond it is blocked at the next signal
                 const bool isChainBlocked = !isPlaceDown
@@ -4628,18 +4639,24 @@ namespace OpenLoco::Vehicles
                     && (signalState & (SignalStateFlags::occupied | SignalStateFlags::blockedNoRoute)) == SignalStateFlags::none
                     && isChainRouteBlocked(head, nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, requiredMods, queryMods);
 
+                // A path signal is red unless a free route to the next signal can be reserved, this reserves it
+                const bool isPathBlocked = isPathSignal
+                    && (signalState & SignalStateFlags::blockedNoRoute) == SignalStateFlags::none
+                    && isPathSignalBlocked(head, nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, requiredMods, queryMods);
+                const bool isHeldByLookahead = isChainBlocked || isPathBlocked;
+
                 if ((signalState & SignalStateFlags::blockedNoRoute) != SignalStateFlags::none)
                 {
                     return Sub4ACEE7Result{ 2, 0, StationId::null };
                 }
-                else if ((signalState & SignalStateFlags::occupied) != SignalStateFlags::none || isChainBlocked)
+                else if ((signalState & SignalStateFlags::occupied) != SignalStateFlags::none || isHeldByLookahead)
                 {
                     // 0x004AD3F8
                     const auto reverseSignalState = getSignalState(nextPos, tad, head.trackType, 1U << 31);
                     uint8_t waitFlags = enumValue(reverseSignalState);
-                    if (isChainBlocked)
+                    if (isHeldByLookahead)
                     {
-                        // The block right after a chain signal is usually empty so the train must not be allowed to
+                        // The block right after the signal is usually empty so the train must not be allowed to
                         // run the signal on that basis, bit 7 makes it reverse out after the timeout instead
                         waitFlags |= (1U << 7);
                     }
@@ -4716,6 +4733,7 @@ namespace OpenLoco::Vehicles
         // Mostly the same as ROAD but with track equivalent functions
         const auto& nextHandle = *++(routings.begin());
         RoutingManager::setRouting(nextHandle, connection);
+        PathReservation::onHeadEnter(head, nextPos, connection);
 
         if (head.var_52 == 1)
         {
@@ -6125,7 +6143,8 @@ namespace OpenLoco::Vehicles
                 {
                     continue;
                 }
-                if ((sigState & SignalStateFlags::occupied) != SignalStateFlags::none)
+                if ((sigState & SignalStateFlags::occupied) != SignalStateFlags::none
+                    && (sigState & SignalStateFlags::path) == SignalStateFlags::none)
                 {
                     penalty = kOccupiedSignalPenalty;
                 }
@@ -6164,6 +6183,116 @@ namespace OpenLoco::Vehicles
         return makeTrackTarget(stationOrder, routeOrder);
     }
 
+    // Safety cap on the length of a route reserved at a path signal
+    static constexpr uint32_t kMaxPathSignalPieces = 256;
+    // A train waiting at a path signal tries to reserve its route again at this interval (in ticks) instead of every tick
+    static constexpr uint32_t kPathSignalRecheckTicks = 8;
+
+    // The train is at the path signal on the piece pos/tad (basic tad with the signal flag).
+    // Follows the route the train will take to the next signal that is a safe place to stop (a free block signal
+    // or a path signal). The route can only be used if none of its pieces is reserved by or occupied by another train.
+    // On success the route is reserved for the train if commit is set.
+    static bool tryReservePathSignalRoute(VehicleHead& head, World::Pos3 pos, uint16_t tad, const uint8_t requiredMods, const uint8_t queryMods, const bool commit)
+    {
+        std::vector<PathReservation::Piece> pieces;
+        for (;;)
+        {
+            const PathReservation::Piece piece{ pos, static_cast<uint16_t>(tad & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask) };
+            if (!PathReservation::isPieceFree(head, piece))
+            {
+                return false;
+            }
+            pieces.push_back(piece);
+            if (pieces.size() >= kMaxPathSignalPieces)
+            {
+                break;
+            }
+
+            const auto [nextPos, nextRotation] = Track::getTrackConnectionEnd(pos, tad & World::Track::AdditionalTaDFlags::basicTaDMask);
+            const auto tc = World::Track::getTrackConnections(nextPos, nextRotation, head.owner, head.trackType, requiredMods, queryMods);
+            if (tc.connections.empty())
+            {
+                // Dead end, the route is reserved up to it
+                break;
+            }
+
+            uint16_t nextTad = tc.connections.front();
+            if (tc.connections.size() > 1)
+            {
+                // Same decision the train would make at the junction, it is made now so it can be reserved
+                Sub4AC3D3State state{};
+                nextTad = trackPathing(head, nextPos, tc, requiredMods, queryMods, false, state);
+            }
+            nextTad &= World::Track::AdditionalTaDFlags::basicTaDWithSignalMask;
+
+            if (nextTad & World::Track::AdditionalTaDFlags::hasSignal)
+            {
+                TrackAndDirection::_TrackAndDirection signalTad{ 0, 0 };
+                signalTad._data = nextTad & World::Track::AdditionalTaDFlags::basicTaDMask;
+                const auto state = getSignalState(nextPos, signalTad, head.trackType, 0);
+                if ((state & SignalStateFlags::blockedNoRoute) != SignalStateFlags::none)
+                {
+                    return false;
+                }
+                if ((state & SignalStateFlags::path) != SignalStateFlags::none)
+                {
+                    // The train can stop in front of a path signal and reserve beyond it from there
+                    break;
+                }
+                if ((state & SignalStateFlags::occupied) != SignalStateFlags::none)
+                {
+                    return false;
+                }
+                if ((state & SignalStateFlags::chain) == SignalStateFlags::none)
+                {
+                    // A free block signal is a safe place to stop
+                    break;
+                }
+                // A free chain signal, the route has to continue through it
+            }
+
+            pos = nextPos;
+            tad = nextTad;
+        }
+
+        if (commit)
+        {
+            PathReservation::set(head, std::move(pieces));
+        }
+        return true;
+    }
+
+    // Returns true if the train at the path signal must wait. If it can go on its route has been reserved.
+    static bool isPathSignalBlocked(VehicleHead& head, const World::Pos3 signalPos, const uint16_t signalTad, const uint8_t requiredMods, const uint8_t queryMods)
+    {
+        struct CacheEntry
+        {
+            World::Pos3 pos;
+            uint16_t tad;
+            uint32_t tick;
+        };
+        // A train that is waiting only tries again at an interval instead of every tick
+        static std::unordered_map<EntityId, CacheEntry> blockedCache;
+
+        const auto ticks = ScenarioManager::getScenarioTicks();
+        if (const auto it = blockedCache.find(head.id); it != blockedCache.end())
+        {
+            const auto& entry = it->second;
+            if (entry.pos == signalPos && entry.tad == signalTad && ticks - entry.tick < kPathSignalRecheckTicks)
+            {
+                return true;
+            }
+        }
+
+        if (tryReservePathSignalRoute(head, signalPos, signalTad, requiredMods, queryMods, true))
+        {
+            blockedCache.erase(head.id);
+            return false;
+        }
+        blockedCache[head.id] = CacheEntry{ signalPos, signalTad, ticks };
+        return true;
+    }
+
     // Safety caps so a chain signal in a huge network can't stall a tick
     static constexpr uint32_t kMaxChainLookaheadPieces = 512;
     static constexpr uint32_t kMaxChainLookaheadJunctions = 6;
@@ -6199,7 +6328,16 @@ namespace OpenLoco::Vehicles
                 TrackAndDirection::_TrackAndDirection signalTad{ 0, 0 };
                 signalTad._data = basicTad;
                 const auto state = getSignalState(pos, signalTad, ctx.head.trackType, 0);
-                if ((state & (SignalStateFlags::occupied | SignalStateFlags::blockedNoRoute)) != SignalStateFlags::none)
+                if ((state & SignalStateFlags::blockedNoRoute) != SignalStateFlags::none)
+                {
+                    return true;
+                }
+                if ((state & SignalStateFlags::path) != SignalStateFlags::none)
+                {
+                    // A path signal lets the train in if a route past it can be reserved, it isn't reserved yet though
+                    return !tryReservePathSignalRoute(ctx.head, pos, tad, ctx.requiredMods, ctx.queryMods, false);
+                }
+                if ((state & SignalStateFlags::occupied) != SignalStateFlags::none)
                 {
                     return true;
                 }
@@ -6744,6 +6882,9 @@ namespace OpenLoco::Vehicles
     // 0x004ADB47
     void VehicleHead::sub_4ADB47(bool unk)
     {
+        // Reversing makes the route reserved ahead meaningless
+        PathReservation::clear(*this);
+
         Vehicle train(*this);
         for (auto& car : train.cars)
         {

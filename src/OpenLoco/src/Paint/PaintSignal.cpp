@@ -148,10 +148,11 @@ namespace OpenLoco::Paint
     // One y offset per character of the marker string
     static constexpr std::array<int8_t, 4> kMarkerYOffsets{};
 
-    // Letter drawn above a chain signal while signals are being edited
-    static void paintChainSignalMarker(PaintSession& session, const World::Pos3& offset)
+    // Letter drawn above a chain or path signal while signals are being edited
+    static void paintSignalKindMarker(PaintSession& session, const World::Pos3& offset, const World::SignalKind kind)
     {
-        auto* psString = session.addToStringPlotList(0, StringIds::chain_signal_marker, 0, 0, kMarkerYOffsets.data(), 0);
+        const auto stringId = kind == World::SignalKind::path ? StringIds::path_signal_marker : StringIds::chain_signal_marker;
+        auto* psString = session.addToStringPlotList(0, stringId, 0, 0, kMarkerYOffsets.data(), 0);
         if (psString == nullptr)
         {
             return;
@@ -215,11 +216,11 @@ namespace OpenLoco::Paint
             }
 
             // Only while the signal tab is open, i.e. when signals are being edited
-            if (kind == World::SignalKind::chain
+            if (kind != World::SignalKind::block
                 && session.getZoom() <= ZoomLevel::full
                 && Ui::Windows::Construction::isSignalTabOpen())
             {
-                paintChainSignalMarker(session, offset);
+                paintSignalKindMarker(session, offset, kind);
             }
         }
         else

@@ -1,4 +1,5 @@
 #include "Vehicles/Routing.h"
+#include "Vehicles/PathReservation.h"
 #include "Economy/Economy.h"
 #include "Entities/EntityManager.h"
 #include "GameCommands/GameCommands.h"
@@ -277,6 +278,10 @@ namespace OpenLoco::Vehicles
         {
             ret |= SignalStateFlags::chain;
         }
+        if (signalSide.hasSignal() && kind == World::SignalKind::path)
+        {
+            ret |= SignalStateFlags::path;
+        }
         if (signalSide.isOccupied())
         {
             ret |= SignalStateFlags::occupied;
@@ -449,6 +454,12 @@ namespace OpenLoco::Vehicles
             const auto rotPos = Math::Vector::rotate(Pos2{ trackPiece.x, trackPiece.y }, tad.cardinalDirection());
             const auto trackLoc = Pos2{ startLoc } + rotPos;
 
+            // A reserved path counts as occupied too so block signals can't send a train into it
+            if (PathReservation::isTileReserved(World::Pos3{ trackLoc, static_cast<int16_t>(startLoc.z + trackPiece.z) }, trackPiece.connectFlags[tad.cardinalDirection()]))
+            {
+                routingTransformData = 1;
+            }
+
             for (auto* entity : EntityManager::EntityTileList(trackLoc))
             {
                 auto* vehicle = entity->asBase<Vehicles::VehicleBase>();
@@ -476,6 +487,53 @@ namespace OpenLoco::Vehicles
             }
         }
         return interest.trackAndDirection & World::Track::AdditionalTaDFlags::hasSignal;
+    }
+
+    bool isTrackPieceOccupiedByOtherTrain(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection tad, const EntityId ownHead)
+    {
+        auto nextLoc = loc;
+        auto& trackSize = World::TrackData::getUnkTrack(tad._data);
+        nextLoc += trackSize.pos;
+        if (trackSize.rotationEnd < 12)
+        {
+            nextLoc -= World::Pos3{ World::kRotationOffset[trackSize.rotationEnd], 0 };
+        }
+
+        auto backwardTaD = tad;
+        backwardTaD.setReversed(!backwardTaD.isReversed());
+        const auto startLoc = tad.isReversed() ? nextLoc : loc;
+
+        for (const auto& trackPiece : TrackData::getTrackPiece(tad.id()))
+        {
+            const auto rotPos = Math::Vector::rotate(Pos2{ trackPiece.x, trackPiece.y }, tad.cardinalDirection());
+            const auto trackLoc = Pos2{ startLoc } + rotPos;
+
+            for (auto* entity : EntityManager::EntityTileList(trackLoc))
+            {
+                auto* vehicle = entity->asBase<Vehicles::VehicleBase>();
+                if (vehicle == nullptr)
+                {
+                    continue;
+                }
+
+                if (vehicle->has38Flags(Vehicles::Flags38::unk_0 | Vehicles::Flags38::unk_2))
+                {
+                    continue;
+                }
+
+                if (vehicle->getHead() == ownHead)
+                {
+                    continue;
+                }
+
+                if ((vehicle->getTrackLoc() == loc && vehicle->getTrackAndDirection().track == tad)
+                    || (vehicle->getTrackLoc() == nextLoc && vehicle->getTrackAndDirection().track == backwardTaD))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // 0x004A2CE7

@@ -171,6 +171,7 @@ namespace OpenLoco::Vehicles
         blockedNoRoute = 1U << 1, // There is no route through the signal at any time (e.g. one way signal and we are going the wrong way)
         occupiedOneWay = 1U << 2, // Signal occupied with a vehicle and signal is one way
         chain = 1U << 3,          // Signal is a chain signal
+        path = 1U << 4,           // Signal is a path signal
     };
     OPENLOCO_ENABLE_ENUM_OPERATORS(SignalStateFlags);
 
@@ -220,6 +221,8 @@ namespace OpenLoco::Vehicles
     void setSignalState(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const uint8_t trackType, uint32_t flags);
     SignalStateFlags getSignalState(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const uint8_t trackType, uint32_t flags);
     void sub_4A2AD7(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const CompanyId company, const uint8_t trackType);
+    // True if a vehicle that isn't part of the train with the head ownHead is on the track piece
+    bool isTrackPieceOccupiedByOtherTrain(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const EntityId ownHead);
     void setReverseSignalOccupiedInBlock(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const CompanyId company, const uint8_t trackType);
     bool isBlockOccupied(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const CompanyId company, const uint8_t trackType);
     uint8_t sub_4A2A58(const World::Pos3& loc, const TrackAndDirection::_TrackAndDirection trackAndDirection, const CompanyId company, const uint8_t trackType);

@@ -38,6 +38,7 @@
 #include "Ui/ProgressBar.h"
 #include "Ui/WindowManager.h"
 #include "Vehicles/OrderManager.h"
+#include "Vehicles/PathReservation.h"
 #include "World/CompanyManager.h"
 #include "World/IndustryManager.h"
 #include "World/StationManager.h"
@@ -878,6 +879,9 @@ namespace OpenLoco::S5
             // Copy the S5 gamestate contents to the destination gamestate, field by field
             auto& src = file->gameState;
             dst = *importGameState(src);
+
+            // Reserved routes are not saved and belong to the previous game
+            Vehicles::PathReservation::reset();
 
             // Copy scenario options
             if (hasLoadFlags(flags, LoadFlags::scenario | LoadFlags::landscape))

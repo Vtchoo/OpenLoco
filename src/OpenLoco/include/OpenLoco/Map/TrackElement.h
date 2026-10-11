@@ -10,6 +10,7 @@ namespace OpenLoco::World
     {
         block = 0, // Green when the block ahead is free
         chain = 1, // Block signal that is also red unless the next signal on the route allows entry
+        path = 2,  // Green when a conflict free route to the next signal can be reserved, ignores block occupancy
     };
 
 #pragma pack(push, 1)
