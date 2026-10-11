@@ -5,13 +5,18 @@
 #include "Scenario/ScenarioManager.h"
 #include "Vehicles/Vehicle.h"
 #include "Vehicles/VehicleHead.h"
+#include "Vehicles/RoutingManager.h"
+#include "Vehicles/VehicleManager.h"
 #include <unordered_map>
 
 namespace OpenLoco::Vehicles::PathReservation
 {
     struct Reservation
     {
-        std::vector<Piece> pieces;
+        std::vector<Piece> pieces; // Route still to be chosen by the head
+        // The piece the head has chosen to enter next. It isn't physically occupied until the head gets there so
+        // it has to stay reserved, otherwise another train could be sent onto it.
+        std::optional<Piece> chosen;
         CompanyId owner;
         uint8_t trackType;
     };
@@ -25,6 +30,11 @@ namespace OpenLoco::Vehicles::PathReservation
     static std::unordered_map<EntityId, Reservation> _reservations;
     // The tiles covered by every reservation, rebuilt whenever a reservation changes or the tick changes
     static std::unordered_multimap<uint64_t, TileRecord> _tiles;
+    // The tiles of the piece every train has chosen to enter next, used when looking for a free route.
+    // Trains that never went through a path signal have no reservation but their next piece isn't occupied yet either.
+    static std::unordered_multimap<uint64_t, TileRecord> _chosenTiles;
+    static bool _chosenDirty = true;
+    static uint32_t _chosenTick = 0xFFFFFFFFU;
     static bool _dirty = false;
     static uint32_t _validatedTick = 0xFFFFFFFFU;
 
@@ -76,6 +86,48 @@ namespace OpenLoco::Vehicles::PathReservation
         }
     }
 
+    // The piece the head has chosen to enter next but isn't physically on yet
+    static std::optional<Piece> getChosenPiece(const VehicleHead& head)
+    {
+        RoutingManager::RingView ring(head.routingHandle);
+        auto it = ring.begin();
+        ++it;
+        const auto routing = RoutingManager::getRouting(*it);
+        if (routing == RoutingManager::kAllocatedButFreeRouting || routing == RoutingManager::kRoutingNull)
+        {
+            return std::nullopt;
+        }
+        const auto [nextPos, nextRotation] = World::Track::getTrackConnectionEnd(World::Pos3(head.tileX, head.tileY, head.tileBaseZ * World::kSmallZStep), head.trackAndDirection.track._data);
+        return Piece{ nextPos, static_cast<uint16_t>(routing & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask) };
+    }
+
+    // Only needed when a route is being reserved so unlike the reservations it is not kept up to date otherwise
+    static void ensureChosenTilesUpToDate()
+    {
+        const uint32_t ticks = ScenarioManager::getScenarioTicks();
+        if (!_chosenDirty && ticks == _chosenTick)
+        {
+            return;
+        }
+        _chosenDirty = false;
+        _chosenTick = ticks;
+
+        _chosenTiles.clear();
+        for (auto* head : VehicleManager::VehicleList())
+        {
+            if (head->mode != TransportMode::rail || !head->isPlaced())
+            {
+                continue;
+            }
+            if (const auto chosen = getChosenPiece(*head))
+            {
+                forEachTile(*chosen, [&](const World::Pos3& tilePos, const uint8_t connectFlags) {
+                    _chosenTiles.emplace(makeTileKey(tilePos), TileRecord{ connectFlags, head->id });
+                });
+            }
+        }
+    }
+
     static void ensureUpToDate()
     {
         if (_reservations.empty())
@@ -112,11 +164,18 @@ namespace OpenLoco::Vehicles::PathReservation
         _tiles.clear();
         for (const auto& [headId, reservation] : _reservations)
         {
-            for (const auto& piece : reservation.pieces)
-            {
+            const auto addPiece = [&, headId = headId](const Piece& piece) {
                 forEachTile(piece, [&](const World::Pos3& tilePos, const uint8_t connectFlags) {
                     _tiles.emplace(makeTileKey(tilePos), TileRecord{ connectFlags, headId });
                 });
+            };
+            for (const auto& piece : reservation.pieces)
+            {
+                addPiece(piece);
+            }
+            if (reservation.chosen)
+            {
+                addPiece(*reservation.chosen);
             }
         }
 
@@ -131,9 +190,11 @@ namespace OpenLoco::Vehicles::PathReservation
     {
         _reservations.clear();
         _tiles.clear();
-        _dirty = false;
-        _validatedTick = 0xFFFFFFFFU;
-    }
+            _chosenTiles.clear();
+            _chosenDirty = true;
+            _dirty = false;
+            _validatedTick = 0xFFFFFFFFU;
+        }
 
     void set(VehicleHead& head, std::vector<Piece>&& pieces)
     {
@@ -141,6 +202,8 @@ namespace OpenLoco::Vehicles::PathReservation
         reservation.owner = head.owner;
         reservation.trackType = head.trackType;
         reservation.pieces = std::move(pieces);
+        // The piece the head is on now is covered by the train being on it
+        reservation.chosen.reset();
         _dirty = true;
 
         // refreshSignals can rebuild the table so work on a copy
@@ -164,12 +227,16 @@ namespace OpenLoco::Vehicles::PathReservation
     bool isPieceFree(const VehicleHead& head, const Piece& piece)
     {
         ensureUpToDate();
+        ensureChosenTilesUpToDate();
 
         bool isFree = true;
-        if (!_tiles.empty())
-        {
+        const auto checkTiles = [&](const std::unordered_multimap<uint64_t, TileRecord>& tiles) {
+            if (tiles.empty())
+            {
+                return;
+            }
             forEachTile(piece, [&](const World::Pos3& tilePos, const uint8_t connectFlags) {
-                const auto [begin, end] = _tiles.equal_range(makeTileKey(tilePos));
+                const auto [begin, end] = tiles.equal_range(makeTileKey(tilePos));
                 for (auto it = begin; it != end; ++it)
                 {
                     if (it->second.owner != head.id && (it->second.connectFlags & connectFlags) != 0)
@@ -178,7 +245,9 @@ namespace OpenLoco::Vehicles::PathReservation
                     }
                 }
             });
-        }
+        };
+        checkTiles(_tiles);
+        checkTiles(_chosenTiles);
         if (!isFree)
         {
             return false;
@@ -231,28 +300,33 @@ namespace OpenLoco::Vehicles::PathReservation
 
     void onHeadEnter(const VehicleHead& head, const World::Pos3& pos, const uint16_t tad)
     {
+        // Any train choosing a piece changes where trains are about to be
+        _chosenDirty = true;
+        if (!_reservations.empty())
+        {
+            _dirty = true;
+        }
+
         const auto it = _reservations.find(head.id);
         if (it == _reservations.end())
         {
             return;
         }
 
-        auto& pieces = it->second.pieces;
+        auto& reservation = it->second;
+        auto& pieces = reservation.pieces;
         if (!pieces.empty()
             && pieces.front().pos == pos
             && (pieces.front().tad & World::Track::AdditionalTaDFlags::basicTaDMask) == (tad & World::Track::AdditionalTaDFlags::basicTaDMask))
         {
-            // The piece is now physically occupied by the train
+            // The previously chosen piece is physically occupied now. The new one is not yet so it stays reserved.
+            reservation.chosen = pieces.front();
             pieces.erase(pieces.begin());
             _dirty = true;
-            if (pieces.empty())
-            {
-                _reservations.erase(it);
-            }
             return;
         }
 
-        // The train left the reserved route so the rest of it is no longer valid
+        // Either the route has been used up or the train left it so nothing more is reserved
         clear(head);
     }
 }
