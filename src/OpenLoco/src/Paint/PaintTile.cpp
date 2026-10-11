@@ -29,6 +29,7 @@
 #include "Paint/PaintWall.h"
 #include "Ui.h"
 #include "Ui/ViewportInteraction.h"
+#include "Vehicles/TrainRouteDebug.h"
 #include "World/Station.h"
 
 using namespace OpenLoco::Ui::ViewportInteraction;
@@ -62,6 +63,25 @@ namespace OpenLoco::Paint
         session.addToPlotListAsParent(ImageId{ ImageIds::blank_tile }, { 0, 0, 16 }, { 32, 32, -1 });
     }
 
+    constexpr std::array<uint32_t, 16> kConstructionArrowImages = {
+        ImageIds::construction_arrow_north,
+        ImageIds::construction_arrow_east,
+        ImageIds::construction_arrow_south,
+        ImageIds::construction_arrow_west,
+        ImageIds::construction_arrow_north2,
+        ImageIds::construction_arrow_east2,
+        ImageIds::construction_arrow_south2,
+        ImageIds::construction_arrow_west2,
+        ImageIds::construction_arrow_north3,
+        ImageIds::construction_arrow_east3,
+        ImageIds::construction_arrow_south3,
+        ImageIds::construction_arrow_west3,
+        ImageIds::construction_arrow_north_east,
+        ImageIds::construction_arrow_south_east,
+        ImageIds::construction_arrow_south_west,
+        ImageIds::construction_arrow_north_west,
+    };
+
     // 0x00461EA7
     static void paintConstructionArrow(PaintSession& session, const World::Pos2& loc)
     {
@@ -76,27 +96,27 @@ namespace OpenLoco::Paint
         }
         session.setEntityPosition(loc);
         const auto dirIndex = (arrow.direction & 0xFC) | (((arrow.direction & 0x3) + session.getRotation()) & 0x3);
-        constexpr std::array<uint32_t, 16> kConstructionArrowImages = {
-            ImageIds::construction_arrow_north,
-            ImageIds::construction_arrow_east,
-            ImageIds::construction_arrow_south,
-            ImageIds::construction_arrow_west,
-            ImageIds::construction_arrow_north2,
-            ImageIds::construction_arrow_east2,
-            ImageIds::construction_arrow_south2,
-            ImageIds::construction_arrow_west2,
-            ImageIds::construction_arrow_north3,
-            ImageIds::construction_arrow_east3,
-            ImageIds::construction_arrow_south3,
-            ImageIds::construction_arrow_west3,
-            ImageIds::construction_arrow_north_east,
-            ImageIds::construction_arrow_south_east,
-            ImageIds::construction_arrow_south_west,
-            ImageIds::construction_arrow_north_west,
-        };
         const auto imageId = ImageId{ kConstructionArrowImages[dirIndex], Colour::yellow };
         session.setItemType(InteractionItem::noInteraction);
         session.addToPlotListAsParent(imageId, { 0, 0, arrow.pos.z }, World::Pos3(0, 0, arrow.pos.z + 10), { 32, 32, -1 });
+    }
+
+    // Debug overlay for the route of the focused train, same style as the construction arrow
+    static void paintTrainRouteArrows(PaintSession& session, const World::Pos2& loc, const World::Pos2& loc2)
+    {
+        const auto* arrows = Vehicles::TrainRouteDebug::getArrowsAt(loc);
+        if (arrows == nullptr)
+        {
+            return;
+        }
+        session.setEntityPosition(loc2);
+        session.setItemType(InteractionItem::noInteraction);
+        for (const auto& arrow : *arrows)
+        {
+            const auto dirIndex = (arrow.direction & 0xFC) | (((arrow.direction & 0x3) + session.getRotation()) & 0x3);
+            const auto imageId = ImageId{ kConstructionArrowImages[dirIndex], Colour::green };
+            session.addToPlotListAsParent(imageId, { 0, 0, arrow.pos.z }, World::Pos3(0, 0, arrow.pos.z + 10), { 32, 32, -1 });
+        }
     }
 
     constexpr std::array<std::array<World::Pos3, 9>, 2> kSupportBoundingBoxOffsets = {
@@ -238,6 +258,7 @@ namespace OpenLoco::Paint
         const auto loc2 = loc + kUnkOffsets[session.getRotation()];
         const auto vpPos = World::gameToScreen(World::Pos3(loc2.x, loc2.y, 0), session.getRotation());
         paintConstructionArrow(session, loc2);
+        paintTrainRouteArrows(session, loc, loc2);
 
         if (vpPos.y + 52 <= session.getWorldY())
         {

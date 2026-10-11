@@ -2521,3 +2521,6 @@ strings:
   2466: "Has cargo order"
   2467: "Transports cargo"
   2468: "{INT16} x {INT16}"
+  2469: "Debug"
+  2470: "Show path of the focused train"
+  2471: "{SMALLFONT}{COLOUR BLACK}Shows the route the pathfinder has calculated for the train of the front most vehicle window as arrows along the track"

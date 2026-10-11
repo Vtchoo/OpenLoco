@@ -40,6 +40,7 @@
 #include "Vehicles/OrderManager.h"
 #include "Vehicles/Orders.h"
 #include "Vehicles/RoutingManager.h"
+#include "Vehicles/TrainRouteDebug.h"
 #include "Vehicles/Vehicle1.h"
 #include "Vehicles/Vehicle2.h"
 #include "Vehicles/VehicleBody.h"
@@ -55,7 +56,9 @@
 
 #include <OpenLoco/Math/Bound.hpp>
 #include <OpenLoco/Math/Trigonometry.hpp>
+#include <algorithm>
 #include <cassert>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -5963,12 +5966,15 @@ namespace OpenLoco::Vehicles
     // Safety cap so a huge network with an unreachable target can't stall a tick
     static constexpr size_t kMaxTrackSearchExpansions = 50000;
 
+    static constexpr size_t kNoSearchParent = std::numeric_limits<size_t>::max();
+
     struct TrackSearchNode
     {
         World::Pos3 pos;
         uint16_t tad; // basicTaDWithSignalMask
         StationId stationId;
         uint8_t firstConnection; // Index into the junction's connections this path started with
+        size_t parent;           // Index into the search's nodes, kNoSearchParent for the starting connections
     };
 
     struct TrackSearchResult
@@ -5976,6 +5982,39 @@ namespace OpenLoco::Vehicles
         uint8_t connectionIndex;
         uint32_t cost;
     };
+
+    // Builds the pathing target for a station or waypoint order. One of the orders must not be null.
+    static Sub4AC94FTarget makeTrackTarget(const OrderStation* stationOrder, const OrderRouteWaypoint* routeOrder)
+    {
+        Sub4AC94FTarget target{};
+        if (stationOrder != nullptr)
+        {
+            // 0x004AC504
+            target.stationId = stationOrder->getStation();
+            auto* station = StationManager::get(target.stationId);
+            target.pos = World::Pos3{ station->x, station->y, station->z };
+        }
+        else
+        {
+            // 0x004AC441
+            target.stationId = StationId::null;
+            target.pos = routeOrder->getWaypoint();
+            target.tad = (routeOrder->getTrackId() << 3) | routeOrder->getDirection();
+            const auto& trackSize = TrackData::getUnkTrack(target.tad);
+            target.reversePos = target.pos + trackSize.pos;
+            if (trackSize.rotationEnd < 12)
+            {
+                target.reversePos -= World::Pos3{ World::kRotationOffset[trackSize.rotationEnd], 0 };
+            }
+            target.reverseTad = target.tad ^ (1U << 2); // Reverse
+            if (trackSize.rotationEnd < 12)
+            {
+                // Same reversed form used when the head consumes the waypoint order
+                target.reverseTad = (target.reverseTad & ~0x3) | (World::kReverseRotation[trackSize.rotationEnd] & 0x3);
+            }
+        }
+        return target;
+    }
 
     static uint64_t getTrackSearchKey(const World::Pos3 pos, const uint16_t tad)
     {
@@ -5990,7 +6029,8 @@ namespace OpenLoco::Vehicles
     // Pieces behind a signal that forbids our direction are not traversable.
     // Returns the junction connection that starts the cheapest route to the target or nullopt
     // if the target can't be reached (or the search cap was hit).
-    static std::optional<TrackSearchResult> trackTargetedGraphSearch(const World::Pos3 pos, const Track::TrackConnections& tc, const CompanyId companyId, const uint8_t trackType, const uint8_t requiredMods, const uint8_t queryMods, const Sub4AC94FTarget& target)
+    // If outRoute is provided it receives every track piece (position and basic tad) of that route in order.
+    static std::optional<TrackSearchResult> trackTargetedGraphSearch(const World::Pos3 pos, const Track::TrackConnections& tc, const CompanyId companyId, const uint8_t trackType, const uint8_t requiredMods, const uint8_t queryMods, const Sub4AC94FTarget& target, std::vector<TrackRoutePiece>* outRoute = nullptr)
     {
         using QueueEntry = std::pair<uint32_t, size_t>; // cost, index into nodes
 
@@ -5998,7 +6038,7 @@ namespace OpenLoco::Vehicles
         std::unordered_map<uint64_t, uint32_t> bestCosts;
         std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<>> open;
 
-        const auto tryPush = [&](const World::Pos3 nodePos, const uint16_t tad, const StationId stationId, const uint32_t cost, const uint8_t firstConnection) {
+        const auto tryPush = [&](const World::Pos3 nodePos, const uint16_t tad, const StationId stationId, const uint32_t cost, const uint8_t firstConnection, const size_t parent) {
             const auto [it, inserted] = bestCosts.try_emplace(getTrackSearchKey(nodePos, tad), cost);
             if (!inserted)
             {
@@ -6008,13 +6048,13 @@ namespace OpenLoco::Vehicles
                 }
                 it->second = cost;
             }
-            nodes.push_back(TrackSearchNode{ nodePos, tad, stationId, firstConnection });
+            nodes.push_back(TrackSearchNode{ nodePos, tad, stationId, firstConnection, parent });
             open.emplace(cost, nodes.size() - 1);
         };
 
         for (auto i = 0U; i < tc.connections.size(); ++i)
         {
-            tryPush(pos, tc.connections[i] & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, StationId::null, 0, static_cast<uint8_t>(i));
+            tryPush(pos, tc.connections[i] & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, StationId::null, 0, static_cast<uint8_t>(i), kNoSearchParent);
         }
 
         size_t expansions = 0;
@@ -6043,6 +6083,15 @@ namespace OpenLoco::Vehicles
             }
             if (hasReachedTarget)
             {
+                if (outRoute != nullptr)
+                {
+                    outRoute->clear();
+                    for (auto i = index; i != kNoSearchParent; i = nodes[i].parent)
+                    {
+                        outRoute->push_back(TrackRoutePiece{ nodes[i].pos, static_cast<uint16_t>(nodes[i].tad & World::Track::AdditionalTaDFlags::basicTaDMask) });
+                    }
+                    std::reverse(outRoute->begin(), outRoute->end());
+                }
                 return TrackSearchResult{ node.firstConnection, cost };
             }
 
@@ -6080,7 +6129,7 @@ namespace OpenLoco::Vehicles
             const auto nextTc = World::Track::getTrackConnections(nextPos, nextRotation, companyId, trackType, requiredMods, queryMods);
             for (const auto connection : nextTc.connections)
             {
-                tryPush(nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, nextTc.stationId, newCost, node.firstConnection);
+                tryPush(nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, nextTc.stationId, newCost, node.firstConnection, index);
             }
         }
         return std::nullopt;
@@ -6123,33 +6172,7 @@ namespace OpenLoco::Vehicles
         auto* routeOrder = curOrder->as<OrderRouteWaypoint>();
         if (stationOrder != nullptr || routeOrder != nullptr)
         {
-            Sub4AC94FTarget target{};
-            if (stationOrder != nullptr)
-            {
-                // 0x004AC504
-                target.stationId = stationOrder->getStation();
-                auto* station = StationManager::get(target.stationId);
-                target.pos = World::Pos3{ station->x, station->y, station->z };
-            }
-            else
-            {
-                // 0x004AC441
-                target.stationId = StationId::null;
-                target.pos = routeOrder->getWaypoint();
-                target.tad = (routeOrder->getTrackId() << 3) | routeOrder->getDirection();
-                const auto& trackSize = TrackData::getUnkTrack(target.tad);
-                target.reversePos = target.pos + trackSize.pos;
-                if (trackSize.rotationEnd < 12)
-                {
-                    target.reversePos -= World::Pos3{ World::kRotationOffset[trackSize.rotationEnd], 0 };
-                }
-                target.reverseTad = target.tad ^ (1U << 2); // Reverse
-                if (trackSize.rotationEnd < 12)
-                {
-                    // Same reversed form used when the head consumes the waypoint order
-                    target.reverseTad = (target.reverseTad & ~0x3) | (World::kReverseRotation[trackSize.rotationEnd] & 0x3);
-                }
-            }
+            const auto target = makeTrackTarget(stationOrder, routeOrder);
             // Full search to the target, no waypoints needed
             if (const auto best = trackTargetedGraphSearch(pos, tc, companyId, trackType, requiredMods, queryMods, target))
             {
@@ -6225,6 +6248,50 @@ namespace OpenLoco::Vehicles
 
             return tc.connections[bestConnection];
         }
+    }
+
+    // Calculates the route the pathfinder would currently pick for this train to reach its current order.
+    // Only meant for the debug overlay, returns an arrow for every piece of the route.
+    std::vector<TrackRouteArrow> calculateTrainRouteArrows(VehicleHead& head)
+    {
+        std::vector<TrackRouteArrow> arrows;
+        if (head.mode != TransportMode::rail || !head.isPlaced())
+        {
+            return arrows;
+        }
+
+        auto orders = head.getCurrentOrders();
+        auto curOrder = orders.begin();
+        const auto* stationOrder = curOrder->as<OrderStation>();
+        const auto* routeOrder = curOrder->as<OrderRouteWaypoint>();
+        if (stationOrder == nullptr && routeOrder == nullptr)
+        {
+            return arrows;
+        }
+        const auto target = makeTrackTarget(stationOrder, routeOrder);
+
+        auto train = Vehicle(head);
+        const auto requiredMods = head.var_53;
+        const auto queryMods = train.veh1->var_49;
+        const auto [nextPos, nextRotation] = Track::getTrackConnectionEnd(World::Pos3(head.tileX, head.tileY, head.tileBaseZ * World::kSmallZStep), head.trackAndDirection.track._data);
+        const auto tc = World::Track::getTrackConnections(nextPos, nextRotation, head.owner, head.trackType, requiredMods, queryMods);
+        if (tc.connections.empty())
+        {
+            return arrows;
+        }
+
+        std::vector<TrackRoutePiece> route;
+        if (!trackTargetedGraphSearch(nextPos, tc, head.owner, head.trackType, requiredMods, queryMods, target, &route))
+        {
+            return arrows;
+        }
+
+        for (const auto& piece : route)
+        {
+            // rotationBegin is the heading the piece is entered with
+            arrows.push_back(TrackRouteArrow{ piece.pos, TrackData::getUnkTrack(piece.tad).rotationBegin });
+        }
+        return arrows;
     }
 
     // 0x004ACCE6

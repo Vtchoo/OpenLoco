@@ -28,6 +28,7 @@
 #include "Ui/Widgets/TabWidget.h"
 #include "Ui/Widgets/TextBoxWidget.h"
 #include "Ui/WindowManager.h"
+#include "Vehicles/TrainRouteDebug.h"
 #include "World/CompanyManager.h"
 #include <OpenLoco/Math/Bound.hpp>
 
@@ -622,7 +623,7 @@ namespace OpenLoco::Ui::Windows::Cheats
 
     namespace Vehicles
     {
-        static constexpr Ui::Size kWindowSize = { 250, 188 };
+        static constexpr Ui::Size kWindowSize = { 250, 223 };
 
         enum widx
         {
@@ -634,6 +635,8 @@ namespace OpenLoco::Ui::Windows::Cheats
             checkbox_build_locked_vehicles,
             vehicle_cargo_group,
             checkbox_keep_cargo_modify_pickup,
+            vehicle_debug_group,
+            checkbox_show_train_route,
         };
 
         namespace Widx
@@ -643,6 +646,7 @@ namespace OpenLoco::Ui::Windows::Cheats
             constexpr WidgetId kCheckboxDisplayLockedVehicles{ "checkbox_display_locked_vehicles" };
             constexpr WidgetId kCheckboxBuildLockedVehicles{ "checkbox_build_locked_vehicles" };
             constexpr WidgetId kCheckboxKeepCargoModifyPickup{ "checkbox_keep_cargo_modify_pickup" };
+            constexpr WidgetId kCheckboxShowTrainRoute{ "checkbox_show_train_route" };
         }
 
         static constexpr auto _widgets = makeWidgets(
@@ -654,7 +658,9 @@ namespace OpenLoco::Ui::Windows::Cheats
             Widgets::Checkbox(Widx::kCheckboxDisplayLockedVehicles, { 10, 116 }, { kWindowSize.width - 20, 12 }, WindowColour::secondary, StringIds::display_locked_vehicles, StringIds::tooltip_display_locked_vehicles),
             Widgets::Checkbox(Widx::kCheckboxBuildLockedVehicles, { 25, 130 }, { kWindowSize.width - 35, 12 }, WindowColour::secondary, StringIds::allow_building_locked_vehicles, StringIds::tooltip_build_locked_vehicles),
             Widgets::GroupBox({ 4, 152 }, { kWindowSize.width - 8, 30 }, WindowColour::secondary, StringIds::cheat_vehicle_cargo),
-            Widgets::Checkbox(Widx::kCheckboxKeepCargoModifyPickup, { 10, 166 }, { kWindowSize.width - 20, 12 }, WindowColour::secondary, StringIds::cheat_keep_cargo_modify_pickup, StringIds::tooltip_keep_cargo_modify_pickup));
+            Widgets::Checkbox(Widx::kCheckboxKeepCargoModifyPickup, { 10, 166 }, { kWindowSize.width - 20, 12 }, WindowColour::secondary, StringIds::cheat_keep_cargo_modify_pickup, StringIds::tooltip_keep_cargo_modify_pickup),
+            Widgets::GroupBox({ 4, 187 }, { kWindowSize.width - 8, 30 }, WindowColour::secondary, StringIds::cheat_vehicle_debug),
+            Widgets::Checkbox(Widx::kCheckboxShowTrainRoute, { 10, 201 }, { kWindowSize.width - 20, 12 }, WindowColour::secondary, StringIds::cheat_show_train_route, StringIds::tooltip_show_train_route));
 
         static void prepareDraw(Window& self)
         {
@@ -687,6 +693,15 @@ namespace OpenLoco::Ui::Windows::Cheats
             else
             {
                 self.activatedWidgets &= ~(1 << widx::checkbox_keep_cargo_modify_pickup);
+            }
+
+            if (OpenLoco::Vehicles::TrainRouteDebug::isEnabled())
+            {
+                self.activatedWidgets |= (1 << widx::checkbox_show_train_route);
+            }
+            else
+            {
+                self.activatedWidgets &= ~(1 << widx::checkbox_show_train_route);
             }
         }
 
@@ -775,6 +790,13 @@ namespace OpenLoco::Ui::Windows::Cheats
                     Config::get().keepCargoModifyPickup = !Config::get().keepCargoModifyPickup;
                     Config::write();
                     WindowManager::invalidateWidget(self.type, self.number, widx::checkbox_keep_cargo_modify_pickup);
+                    break;
+                }
+
+                case Widx::kCheckboxShowTrainRoute:
+                {
+                    OpenLoco::Vehicles::TrainRouteDebug::setEnabled(!OpenLoco::Vehicles::TrainRouteDebug::isEnabled());
+                    WindowManager::invalidateWidget(self.type, self.number, widx::checkbox_show_train_route);
                     break;
                 }
             }

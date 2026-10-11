@@ -52,6 +52,7 @@
 #include "Ui/ProgressBar.h"
 #include "Ui/ToolTip.h"
 #include "Ui/WindowManager.h"
+#include "Vehicles/TrainRouteDebug.h"
 #include "Vehicles/Vehicle.h"
 #include "ViewportManager.h"
 #include "World/CompanyManager.h"
@@ -194,6 +195,7 @@ namespace OpenLoco
 
         Input::processKeyboardInput();
         WindowManager::tick();
+        Vehicles::TrainRouteDebug::update();
         Ui::handleInput();
         CompanyManager::updateOwnerStatus();
     }
