@@ -2181,6 +2181,10 @@ namespace OpenLoco::StringIds
     constexpr StringId cheat_vehicle_debug = 2469;
     constexpr StringId cheat_show_train_route = 2470;
     constexpr StringId tooltip_show_train_route = 2471;
+    constexpr StringId signal_kind_block = 2472;
+    constexpr StringId signal_kind_chain = 2473;
+    constexpr StringId tooltip_select_signal_kind = 2474;
+    constexpr StringId chain_signal_marker = 2475;
 
     constexpr StringId temporary_object_load_str_0 = 8192;
     constexpr StringId temporary_object_load_str_1 = 8193;

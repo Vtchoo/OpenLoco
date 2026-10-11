@@ -5,7 +5,7 @@
 
 namespace OpenLoco::GameCommands
 {
-    static uint32_t placeSignal(const World::Pos3& pos, const uint16_t tad, const uint16_t sides, const uint8_t trackObjType, const uint8_t signalType, const uint8_t index, const Flags flags)
+    static uint32_t placeSignal(const World::Pos3& pos, const uint16_t tad, const uint16_t sides, const uint8_t trackObjType, const uint8_t signalType, const World::SignalKind signalKind, const uint8_t index, const Flags flags)
     {
         GameCommands::SignalPlacementArgs sargs{};
         sargs.pos = pos;
@@ -15,6 +15,7 @@ namespace OpenLoco::GameCommands
         sargs.sides = sides;
         sargs.trackObjType = trackObjType;
         sargs.type = signalType;
+        sargs.kind = signalKind;
 
         return GameCommands::doCommand(sargs, flags);
     }
@@ -31,8 +32,8 @@ namespace OpenLoco::GameCommands
             args.step,
             flags,
             [](const World::TrackElement& elTrack) { return elTrack.hasSignal(); },
-            [signalType = args.type](const World::Pos3& pos, const uint16_t tad, const uint16_t sides, const uint8_t trackObjType, const uint8_t index, const Flags flags) {
-                return placeSignal(pos, tad, sides, trackObjType, signalType, index, flags);
+            [signalType = args.type, signalKind = args.kind](const World::Pos3& pos, const uint16_t tad, const uint16_t sides, const uint8_t trackObjType, const uint8_t index, const Flags flags) {
+                return placeSignal(pos, tad, sides, trackObjType, signalType, signalKind, index, flags);
             });
     }
 

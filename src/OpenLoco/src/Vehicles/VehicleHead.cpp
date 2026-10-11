@@ -114,6 +114,7 @@ namespace OpenLoco::Vehicles
     static uint16_t roadPathing(VehicleHead& head, const World::Pos3 pos, const Track::RoadConnections& rc, const uint8_t requiredMods, const uint8_t queryMods, const uint32_t allowedStationTypes, bool isSecondRun, Sub4AC3D3State& state);
     static uint16_t trackLongestPathing(VehicleHead& head, const World::Pos3 pos, const Track::TrackConnections& tc, const uint8_t requiredMods, const uint8_t queryMods);
     static uint16_t trackPathing(VehicleHead& head, const World::Pos3 pos, const Track::TrackConnections& tc, const uint8_t requiredMods, const uint8_t queryMods, bool isSecondRun, Sub4AC3D3State& state);
+    static bool isChainRouteBlocked(VehicleHead& head, const World::Pos3 signalPos, const uint16_t signalTad, const uint8_t requiredMods, const uint8_t queryMods);
 
     struct WaterPathingResult
     {
@@ -4618,13 +4619,20 @@ namespace OpenLoco::Vehicles
                 tad._data = connection & World::Track::AdditionalTaDFlags::basicTaDMask;
                 const auto keySignalStateFlags = isPlaceDown ? (SignalStateFlags::occupied)
                                                              : (SignalStateFlags::occupied | SignalStateFlags::occupiedOneWay | SignalStateFlags::blockedNoRoute);
-                const auto signalState = getSignalState(nextPos, tad, head.trackType, 0U) & keySignalStateFlags;
+                const auto fullSignalState = getSignalState(nextPos, tad, head.trackType, 0U);
+                const auto signalState = fullSignalState & keySignalStateFlags;
+
+                // A chain signal is also red if the route beyond it is blocked at the next signal
+                const bool isChainBlocked = !isPlaceDown
+                    && (fullSignalState & SignalStateFlags::chain) != SignalStateFlags::none
+                    && (signalState & (SignalStateFlags::occupied | SignalStateFlags::blockedNoRoute)) == SignalStateFlags::none
+                    && isChainRouteBlocked(head, nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, requiredMods, queryMods);
 
                 if ((signalState & SignalStateFlags::blockedNoRoute) != SignalStateFlags::none)
                 {
                     return Sub4ACEE7Result{ 2, 0, StationId::null };
                 }
-                else if ((signalState & SignalStateFlags::occupied) != SignalStateFlags::none)
+                else if ((signalState & SignalStateFlags::occupied) != SignalStateFlags::none || isChainBlocked)
                 {
                     // 0x004AD3F8
                     const auto reverseSignalState = getSignalState(nextPos, tad, head.trackType, 1U << 31);
@@ -6135,6 +6143,138 @@ namespace OpenLoco::Vehicles
         return std::nullopt;
     }
 
+    // The pathing target of the head's current station or waypoint order, if it has one
+    static std::optional<Sub4AC94FTarget> getTrackTargetForCurrentOrder(const VehicleHead& head)
+    {
+        auto orders = head.getCurrentOrders();
+        auto curOrder = orders.begin();
+        const auto* stationOrder = curOrder->as<OrderStation>();
+        const auto* routeOrder = curOrder->as<OrderRouteWaypoint>();
+        if (stationOrder == nullptr && routeOrder == nullptr)
+        {
+            return std::nullopt;
+        }
+        return makeTrackTarget(stationOrder, routeOrder);
+    }
+
+    // Safety caps so a chain signal in a huge network can't stall a tick
+    static constexpr uint32_t kMaxChainLookaheadPieces = 512;
+    static constexpr uint32_t kMaxChainLookaheadJunctions = 6;
+    // A train waiting at a chain signal re-checks the route ahead at this interval (in ticks) instead of every tick
+    static constexpr uint32_t kChainRecheckTicks = 8;
+
+    struct ChainLookahead
+    {
+        VehicleHead& head;
+        std::optional<Sub4AC94FTarget> target;
+        uint8_t requiredMods;
+        uint8_t queryMods;
+        uint32_t remainingPieces;
+    };
+
+    // The train is about to enter the piece pos/tad (basic tad with signal flag).
+    // Follows the track from there to the next signal on the train's route.
+    // Returns true if the train can't get through to a signal that allows entry.
+    // evaluateSignal should be false for the piece the chain signal itself is on.
+    static bool isChainBlockedEntering(ChainLookahead& ctx, World::Pos3 pos, uint16_t tad, bool evaluateSignal, const uint32_t junctionDepth)
+    {
+        for (;;)
+        {
+            if (ctx.remainingPieces == 0)
+            {
+                return false;
+            }
+            --ctx.remainingPieces;
+
+            const auto basicTad = static_cast<uint16_t>(tad & World::Track::AdditionalTaDFlags::basicTaDMask);
+            if (evaluateSignal && (tad & World::Track::AdditionalTaDFlags::hasSignal))
+            {
+                TrackAndDirection::_TrackAndDirection signalTad{ 0, 0 };
+                signalTad._data = basicTad;
+                const auto state = getSignalState(pos, signalTad, ctx.head.trackType, 0);
+                if ((state & (SignalStateFlags::occupied | SignalStateFlags::blockedNoRoute)) != SignalStateFlags::none)
+                {
+                    return true;
+                }
+                if ((state & SignalStateFlags::chain) == SignalStateFlags::none)
+                {
+                    // A free block signal, safe to stop at
+                    return false;
+                }
+                // A free chain signal, the route beyond it must be free too
+            }
+            evaluateSignal = true;
+
+            const auto [nextPos, nextRotation] = Track::getTrackConnectionEnd(pos, basicTad);
+            const auto tc = World::Track::getTrackConnections(nextPos, nextRotation, ctx.head.owner, ctx.head.trackType, ctx.requiredMods, ctx.queryMods);
+            if (tc.connections.empty())
+            {
+                return false;
+            }
+            if (tc.connections.size() == 1)
+            {
+                pos = nextPos;
+                tad = tc.connections.front() & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask;
+                continue;
+            }
+
+            if (junctionDepth >= kMaxChainLookaheadJunctions)
+            {
+                return false;
+            }
+            if (ctx.target)
+            {
+                const auto best = trackTargetedGraphSearch(nextPos, tc, ctx.head.owner, ctx.head.trackType, ctx.requiredMods, ctx.queryMods, *ctx.target);
+                if (!best)
+                {
+                    return false;
+                }
+                pos = nextPos;
+                tad = tc.connections[best->connectionIndex] & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask;
+                continue;
+            }
+
+            // No destination so any branch could be taken, only blocked if all of them are
+            for (const auto connection : tc.connections)
+            {
+                if (!isChainBlockedEntering(ctx, nextPos, connection & World::Track::AdditionalTaDFlags::basicTaDWithSignalMask, true, junctionDepth + 1))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    // The train is at a chain signal on the piece signalPos/signalTad (basic tad with signal flag)
+    // and the signal itself is free. Returns true if the route beyond is blocked so the train must wait.
+    static bool isChainRouteBlocked(VehicleHead& head, const World::Pos3 signalPos, const uint16_t signalTad, const uint8_t requiredMods, const uint8_t queryMods)
+    {
+        struct CacheEntry
+        {
+            World::Pos3 pos;
+            uint16_t tad;
+            uint32_t tick;
+            bool blocked;
+        };
+        static std::unordered_map<EntityId, CacheEntry> cache;
+
+        const auto ticks = ScenarioManager::getScenarioTicks();
+        if (const auto it = cache.find(head.id); it != cache.end())
+        {
+            const auto& entry = it->second;
+            if (entry.pos == signalPos && entry.tad == signalTad && ticks - entry.tick < kChainRecheckTicks)
+            {
+                return entry.blocked;
+            }
+        }
+
+        ChainLookahead ctx{ head, getTrackTargetForCurrentOrder(head), requiredMods, queryMods, kMaxChainLookaheadPieces };
+        const bool blocked = isChainBlockedEntering(ctx, signalPos, signalTad, false, 0);
+        cache[head.id] = CacheEntry{ signalPos, signalTad, ticks, blocked };
+        return blocked;
+    }
+
     // 0x004AC3D3
     // pos.x : ax
     // pos.y : cx
@@ -6260,15 +6400,11 @@ namespace OpenLoco::Vehicles
             return arrows;
         }
 
-        auto orders = head.getCurrentOrders();
-        auto curOrder = orders.begin();
-        const auto* stationOrder = curOrder->as<OrderStation>();
-        const auto* routeOrder = curOrder->as<OrderRouteWaypoint>();
-        if (stationOrder == nullptr && routeOrder == nullptr)
+        const auto target = getTrackTargetForCurrentOrder(head);
+        if (!target)
         {
             return arrows;
         }
-        const auto target = makeTrackTarget(stationOrder, routeOrder);
 
         auto train = Vehicle(head);
         const auto requiredMods = head.var_53;
@@ -6281,7 +6417,7 @@ namespace OpenLoco::Vehicles
         }
 
         std::vector<TrackRoutePiece> route;
-        if (!trackTargetedGraphSearch(nextPos, tc, head.owner, head.trackType, requiredMods, queryMods, target, &route))
+        if (!trackTargetedGraphSearch(nextPos, tc, head.owner, head.trackType, requiredMods, queryMods, *target, &route))
         {
             return arrows;
         }

@@ -5,6 +5,13 @@
 
 namespace OpenLoco::World
 {
+    // What a signal does when a train reaches it
+    enum class SignalKind : uint8_t
+    {
+        block = 0, // Green when the block ahead is free
+        chain = 1, // Block signal that is also red unless the next signal on the route allows entry
+    };
+
 #pragma pack(push, 1)
 
     struct TrackElement : public TileElement
@@ -80,6 +87,20 @@ namespace OpenLoco::World
         {
             _6 &= ~0xE0;
             _6 |= (bridgeObjectId & 0x7) << 5;
+        }
+        // The kind of the signals on this piece, the signal element itself has no room for it.
+        // Set on every track element of the piece that has signals. Only meaningful for a side that has a signal.
+        SignalKind leftSignalKind() const { return static_cast<SignalKind>(_6 & 0x3); } // _6 bits 0-1
+        void setLeftSignalKind(SignalKind kind)
+        {
+            _6 &= ~0x3;
+            _6 |= static_cast<uint8_t>(kind) & 0x3;
+        }
+        SignalKind rightSignalKind() const { return static_cast<SignalKind>((_6 >> 2) & 0x3); } // _6 bits 2-3
+        void setRightSignalKind(SignalKind kind)
+        {
+            _6 &= ~0xC;
+            _6 |= (static_cast<uint8_t>(kind) & 0x3) << 2;
         }
         CompanyId owner() const { return CompanyId(_7 & 0xF); } // _7l
         void setOwner(CompanyId newOwner) { _7 = (_7 & 0xF0) | (enumValue(newOwner) & 0xF); }

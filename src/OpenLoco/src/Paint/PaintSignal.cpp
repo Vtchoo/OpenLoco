@@ -2,7 +2,9 @@
 #include "Graphics/Colour.h"
 #include "Graphics/ImageIds.h"
 #include "Graphics/RenderTarget.h"
+#include "Localisation/StringIds.h"
 #include "Map/SignalElement.h"
+#include "Map/Tile.h"
 #include "Map/TileElement.h"
 #include "Map/TileElementEntry.h"
 #include "Map/Track/TrackData.h"
@@ -142,7 +144,23 @@ namespace OpenLoco::Paint
         }
     }
 
-    static void paintSignalSide(PaintSession& session, const World::SignalElement::Side& side, const bool isRight, const bool isGhost, const uint8_t trackId, const uint8_t rotation, const coord_t height)
+    // One y offset per character of the marker string
+    static constexpr std::array<int8_t, 4> kMarkerYOffsets{};
+
+    // Letter drawn above a chain signal while signals are being edited
+    static void paintChainSignalMarker(PaintSession& session, const World::Pos3& offset)
+    {
+        auto* psString = session.addToStringPlotList(0, StringIds::chain_signal_marker, 0, 0, kMarkerYOffsets.data(), 0);
+        if (psString == nullptr)
+        {
+            return;
+        }
+        const auto tilePos = session.getSpritePosition();
+        const auto vpPos = World::gameToScreen(World::Pos3(tilePos.x + offset.x, tilePos.y + offset.y, offset.z + 24), session.getRotation());
+        psString->vpPos = Ui::Point{ vpPos.x - 3, vpPos.y };
+    }
+
+    static void paintSignalSide(PaintSession& session, const World::SignalElement::Side& side, const World::SignalKind kind, const bool isRight, const bool isGhost, const uint8_t trackId, const uint8_t rotation, const coord_t height)
     {
         if (side.hasSignal())
         {
@@ -194,6 +212,14 @@ namespace OpenLoco::Paint
                     session.addToPlotListAsChild(imageId, offset, bbOffset, bbSize);
                 }
             }
+
+            // The direction arrows view is what's shown while placing signals
+            if (kind == World::SignalKind::chain
+                && (session.getViewFlags() & Ui::ViewportFlags::one_way_direction_arrows) != Ui::ViewportFlags::none
+                && session.getZoom() <= ZoomLevel::full)
+            {
+                paintChainSignalMarker(session, offset);
+            }
         }
         else
         {
@@ -243,7 +269,7 @@ namespace OpenLoco::Paint
         {
             auto& leftSignal = elSignal.getLeft();
             const bool leftIsGhost = elSignal.isGhost() || elSignal.isLeftGhost();
-            paintSignalSide(session, leftSignal, false, leftIsGhost, trackId, rotation, height);
+            paintSignalSide(session, leftSignal, elTrack->leftSignalKind(), false, leftIsGhost, trackId, rotation, height);
         }
         if (!elTrack->isFlag6())
         {
@@ -252,6 +278,6 @@ namespace OpenLoco::Paint
 
         auto& rightSignal = elSignal.getRight();
         const bool rightIsGhost = elSignal.isGhost() || elSignal.isRightGhost();
-        paintSignalSide(session, rightSignal, true, rightIsGhost, trackId, rotation, height);
+        paintSignalSide(session, rightSignal, elTrack->rightSignalKind(), true, rightIsGhost, trackId, rotation, height);
     }
 }

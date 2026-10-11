@@ -2524,3 +2524,7 @@ strings:
   2469: "Debug"
   2470: "Show path of the focused train"
   2471: "{SMALLFONT}{COLOUR BLACK}Shows the route the pathfinder has calculated for the train of the front most vehicle window as arrows along the track"
+  2472: "Block signal"
+  2473: "Chain signal"
+  2474: "{SMALLFONT}{COLOUR BLACK}Select the kind of signal to place. Block signals are green when the block ahead is free. Chain signals are also red when the next signal on the train’s route does not allow it to enter, so trains wait before junctions instead of blocking them"
+  2475: "{COLOUR YELLOW}C"

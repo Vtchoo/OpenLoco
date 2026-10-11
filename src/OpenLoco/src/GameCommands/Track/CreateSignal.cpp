@@ -226,6 +226,7 @@ namespace OpenLoco::GameCommands
                         left.setSignalObjectId(args.type);
                         left.setFrame(0);
                         left.setAllLights(0);
+                        pieceElTrack->setLeftSignalKind(args.kind);
                     }
                 }
                 if (sides & (1U << 14))
@@ -238,6 +239,7 @@ namespace OpenLoco::GameCommands
                         right.setSignalObjectId(args.type);
                         right.setFrame(0);
                         right.setAllLights(0);
+                        pieceElTrack->setRightSignalKind(args.kind);
                     }
                 }
                 if (!hasFlags(flags, Flags::ghost))

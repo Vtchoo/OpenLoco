@@ -73,6 +73,7 @@ namespace OpenLoco::Ui::Windows::Construction
         uint8_t isSignalBothDirections;  // 0x0113602F
         uint8_t signalPlacementStepSize; // new
         bool repeatedSignalMode;         // new
+        uint8_t signalKind;              // new, World::SignalKind of the signals placed
 
         uint8_t bridgeList[9];           // 0x01136030
         uint8_t lastSelectedBridge;      // 0x01136039
@@ -338,6 +339,8 @@ namespace OpenLoco::Ui::Windows::Construction
             signal_dropdown,
             both_directions,
             single_direction,
+            signal_kind,
+            signal_kind_dropdown,
             auto_mode,
             step_label,
             step_value,
@@ -351,6 +354,8 @@ namespace OpenLoco::Ui::Windows::Construction
             constexpr WidgetId kSignalDropdown{ "signal_dropdown" };
             constexpr WidgetId kBothDirections{ "both_directions" };
             constexpr WidgetId kSingleDirection{ "single_direction" };
+            constexpr WidgetId kSignalKind{ "signal_kind" };
+            constexpr WidgetId kSignalKindDropdown{ "signal_kind_dropdown" };
             constexpr WidgetId kAutoMode{ "auto_mode" };
             constexpr WidgetId kStepLabel{ "step_label" };
             constexpr WidgetId kStepValue{ "step_value" };

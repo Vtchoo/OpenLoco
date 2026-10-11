@@ -198,14 +198,15 @@ namespace OpenLoco
                         if (elSignal->getLeft().hasSignal() && !elSignal->isLeftGhost())
                         {
                             args.type = elSignal->getLeft().signalObjectId();
+                            args.kind = elProcessedTrack->leftSignalKind();
                             sideFlags |= 0x8000U;
                         }
                         if (elSignal->getRight().hasSignal() && !elSignal->isRightGhost())
                         {
                             // If there is a signal on both sides and the signal object
-                            // type is different then we will need to make two separate
+                            // type or kind is different then we will need to make two separate
                             // signal args
-                            if (sideFlags != 0 && args.type != elSignal->getRight().signalObjectId())
+                            if (sideFlags != 0 && (args.type != elSignal->getRight().signalObjectId() || args.kind != elProcessedTrack->rightSignalKind()))
                             {
                                 GameCommands::SignalPlacementArgs args2 = args;
                                 args2.sides = sideFlags;
@@ -214,6 +215,7 @@ namespace OpenLoco
                                 sideFlags = 0U;
                             }
                             args.type = elSignal->getRight().signalObjectId();
+                            args.kind = elProcessedTrack->rightSignalKind();
                             sideFlags |= 0x4000U;
                         }
                         args.sides = sideFlags;

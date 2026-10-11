@@ -137,6 +137,7 @@ namespace OpenLoco::Ui::Windows::Construction
 
         cState.signalPlacementStepSize = Signal::kDefaultSignalPlacementStepSize;
         cState.repeatedSignalMode = false;
+        cState.signalKind = static_cast<uint8_t>(World::SignalKind::block);
 
         return trackWindow();
     }

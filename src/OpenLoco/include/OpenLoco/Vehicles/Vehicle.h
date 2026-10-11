@@ -170,6 +170,7 @@ namespace OpenLoco::Vehicles
         occupied = 1U << 0,       // Signal occupied with a vehicle (can be one or two way)
         blockedNoRoute = 1U << 1, // There is no route through the signal at any time (e.g. one way signal and we are going the wrong way)
         occupiedOneWay = 1U << 2, // Signal occupied with a vehicle and signal is one way
+        chain = 1U << 3,          // Signal is a chain signal
     };
     OPENLOCO_ENABLE_ENUM_OPERATORS(SignalStateFlags);
 

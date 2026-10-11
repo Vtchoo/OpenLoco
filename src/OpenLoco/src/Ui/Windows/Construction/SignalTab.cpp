@@ -30,19 +30,31 @@ using namespace OpenLoco::World::TileManager;
 namespace OpenLoco::Ui::Windows::Construction::Signal
 {
     constexpr int32_t kWidth = 156;
-    constexpr int32_t kHeight = 222;
+    constexpr int32_t kHeight = 238;
     constexpr int32_t kSpacing = 4;
     constexpr int32_t kImageButtonSize = 40;
     constexpr int32_t kStepperWidth = 48;
+
+    // Signal kinds the player can place, in dropdown order
+    struct SignalKindEntry
+    {
+        World::SignalKind kind;
+        StringId name;
+    };
+    static constexpr std::array<SignalKindEntry, 2> kSignalKinds = { {
+        { World::SignalKind::block, StringIds::signal_kind_block },
+        { World::SignalKind::chain, StringIds::signal_kind_chain },
+    } };
 
     static constexpr auto widgets = makeWidgets(
         Common::makeCommonWidgets(kWidth, kHeight, StringIds::stringid_2),
         Widgets::dropdownWidgets(Widx::kSignal, Widx::kSignalDropdown, { kSpacing, 45 }, { kWidth - (kSpacing * 2), 12 }, WindowColour::secondary, Widget::kContentNull, StringIds::tooltip_select_signal_type),
         Widgets::ImageButton(Widx::kBothDirections, { ((kWidth - (kSpacing * 2)) / 2) - kSpacing - kImageButtonSize, 110 }, { kImageButtonSize, kImageButtonSize }, WindowColour::secondary, Widget::kContentNull, StringIds::tooltip_signal_both_directions),
         Widgets::ImageButton(Widx::kSingleDirection, { ((kWidth - (kSpacing * 2)) / 2) + kSpacing, 110 }, { kImageButtonSize, kImageButtonSize }, WindowColour::secondary, Widget::kContentNull, StringIds::tooltip_signal_single_direction),
-        Widgets::Checkbox(Widx::kAutoMode, { kSpacing, 166 }, { kWidth - (kSpacing * 2), 12 }, WindowColour::secondary, StringIds::signal_placement_repeat, StringIds::signal_placement_repeat_tooltip),
-        Widgets::Label(Widx::kStepLabel, { kSpacing, 182 }, { kWidth - (kSpacing * 2), 13 }, WindowColour::secondary, ContentAlign::left, StringIds::signal_placement_step_size),
-        Widgets::stepperWidgets(Widx::kStepValue, Widx::kStepDecrease, Widx::kStepIncrease, { kWidth - kSpacing - kStepperWidth, 182 }, { kStepperWidth, 12 }, WindowColour::secondary, StringIds::uint16_raw, StringIds::tooltip_select_signal_type)
+        Widgets::dropdownWidgets(Widx::kSignalKind, Widx::kSignalKindDropdown, { kSpacing, 166 }, { kWidth - (kSpacing * 2), 12 }, WindowColour::secondary, Widget::kContentNull, StringIds::tooltip_select_signal_kind),
+        Widgets::Checkbox(Widx::kAutoMode, { kSpacing, 182 }, { kWidth - (kSpacing * 2), 12 }, WindowColour::secondary, StringIds::signal_placement_repeat, StringIds::signal_placement_repeat_tooltip),
+        Widgets::Label(Widx::kStepLabel, { kSpacing, 198 }, { kWidth - (kSpacing * 2), 13 }, WindowColour::secondary, ContentAlign::left, StringIds::signal_placement_step_size),
+        Widgets::stepperWidgets(Widx::kStepValue, Widx::kStepDecrease, Widx::kStepIncrease, { kWidth - kSpacing - kStepperWidth, 198 }, { kStepperWidth, 12 }, WindowColour::secondary, StringIds::uint16_raw, StringIds::tooltip_select_signal_type)
         // cost of signal placement is drawn at the bottom of the window as the last widget
 
     );
@@ -115,6 +127,27 @@ namespace OpenLoco::Ui::Windows::Construction::Signal
                 break;
             }
 
+            case Widx::kSignalKindDropdown:
+            {
+                auto widget = self.widgets[widx::signal_kind];
+                auto xPos = widget.left + self.x;
+                auto yPos = widget.top + self.y;
+                auto width = widget.width() + 2;
+                auto height = widget.height();
+
+                Dropdown::show(xPos, yPos, width, height, self.getColour(WindowColour::secondary), kSignalKinds.size(), (1 << 7));
+
+                for (auto i = 0U; i < kSignalKinds.size(); ++i)
+                {
+                    if (static_cast<uint8_t>(kSignalKinds[i].kind) == cState.signalKind)
+                    {
+                        Dropdown::setHighlightedItem(i);
+                    }
+                    Dropdown::add(i, kSignalKinds[i].name);
+                }
+                break;
+            }
+
             case Widx::kBothDirections:
             {
                 cState.isSignalBothDirections = 1;
@@ -151,12 +184,24 @@ namespace OpenLoco::Ui::Windows::Construction::Signal
     // 0x0049E67C
     static void onDropdown(Window& self, [[maybe_unused]] WidgetIndex_t widgetIndex, const WidgetId id, int16_t itemIndex)
     {
+        auto& cState = getConstructionState();
+        if (id == Widx::kSignalKindDropdown)
+        {
+            if (itemIndex != -1)
+            {
+                cState.signalKind = static_cast<uint8_t>(kSignalKinds[itemIndex].kind);
+                // The ghost on the map is for the previous kind
+                removeConstructionGhosts();
+                self.invalidate();
+            }
+            return;
+        }
+
         if (id != Widx::kSignalDropdown)
         {
             return;
         }
 
-        auto& cState = getConstructionState();
         if (itemIndex != -1)
         {
             cState.lastSelectedSignal = cState.signalList[itemIndex];
@@ -206,6 +251,7 @@ namespace OpenLoco::Ui::Windows::Construction::Signal
         args.index = elTrack->sequenceIndex();
         args.trackObjType = elTrack->trackObjectId();
         args.step = cState.repeatedSignalMode ? cState.signalPlacementStepSize : 0;
+        args.kind = static_cast<World::SignalKind>(cState.signalKind);
 
         if (isBothDirectons)
         {
@@ -358,6 +404,15 @@ namespace OpenLoco::Ui::Windows::Construction::Signal
 
         auto trainSignalObject = ObjectManager::get<TrainSignalObject>(cState.lastSelectedSignal);
         self.widgets[widx::signal].text = trainSignalObject->name;
+
+        self.widgets[widx::signal_kind].text = kSignalKinds[0].name;
+        for (const auto& entry : kSignalKinds)
+        {
+            if (static_cast<uint8_t>(entry.kind) == cState.signalKind)
+            {
+                self.widgets[widx::signal_kind].text = entry.name;
+            }
+        }
 
         if (cState.repeatedSignalMode)
         {

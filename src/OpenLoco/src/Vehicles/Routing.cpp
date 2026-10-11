@@ -267,10 +267,16 @@ namespace OpenLoco::Vehicles
         }
 
         auto* elSignal = res->first;
+        const auto* foundTrack = res->second;
 
         // edx
         auto& signalSide = (flags & (1ULL << 31)) ? elSignal->getRight() : elSignal->getLeft();
         auto ret = SignalStateFlags::none;
+        const auto kind = (flags & (1ULL << 31)) ? foundTrack->rightSignalKind() : foundTrack->leftSignalKind();
+        if (signalSide.hasSignal() && kind == World::SignalKind::chain)
+        {
+            ret |= SignalStateFlags::chain;
+        }
         if (signalSide.isOccupied())
         {
             ret |= SignalStateFlags::occupied;

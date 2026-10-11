@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameCommands/GameCommands.h"
+#include "Map/TrackElement.h"
 
 namespace OpenLoco::GameCommands
 {
@@ -17,6 +18,7 @@ namespace OpenLoco::GameCommands
             , type((regs.edi >> 16) & 0xFF)
             , trackObjType(regs.ebp & 0xFF)
             , sides((regs.edi >> 16) & 0xC000)
+            , kind(static_cast<World::SignalKind>((regs.edi >> 24) & 0x3))
         {
         }
 
@@ -27,6 +29,7 @@ namespace OpenLoco::GameCommands
         uint8_t type;
         uint8_t trackObjType;
         uint16_t sides;
+        World::SignalKind kind = World::SignalKind::block;
 
         explicit operator registers() const
         {
@@ -36,7 +39,7 @@ namespace OpenLoco::GameCommands
             regs.bh = rotation;
             regs.dl = trackId;
             regs.dh = index;
-            regs.edi = pos.z | (type << 16) | ((sides & 0xC000) << 16);
+            regs.edi = pos.z | (type << 16) | (static_cast<uint32_t>(kind) << 24) | ((sides & 0xC000) << 16);
             regs.ebp = trackObjType;
             return regs;
         }
